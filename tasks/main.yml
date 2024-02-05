@@ -1,0 +1,165 @@
+- name: Allow the SHA-1 sign package
+  shell: update-crypto-policies --set DEFAULT:SHA1
+
+- name: Repository (RedHat)
+  block:
+    - name: MongoDB Repository GPG key
+      rpm_key:
+        key: https://www.mongodb.org/static/pgp/server-6.0.asc
+        state: present
+
+    - name: MongoDB Repository
+      yum_repository:
+        name: MongoDB
+        description: MongoDB
+        baseurl: https://repo.mongodb.org/yum/redhat/$releasever/mongodb-org/6.0/x86_64/
+        enabled: yes
+        gpgcheck : yes
+        gpgkey: https://www.mongodb.org/static/pgp/server-6.0.asc
+
+    - name: OpenSearch Repository GPG key
+      rpm_key:
+        key: https://artifacts.opensearch.org/publickeys/opensearch.pgp
+        state: present
+
+    - name: OpenSearch Repository
+      yum_repository:
+        name: OpenSearch
+        description: OpenSearch
+        baseurl: https://artifacts.opensearch.org/releases/bundle/opensearch/2.x/yum
+        enabled: yes
+        gpgcheck : yes
+        gpgkey: https://artifacts.opensearch.org/publickeys/opensearch.pgp
+
+    - name: Graylog Repository GPG key
+      rpm_key:
+        key: https://packages.graylog2.org/repo/el/stable/GPG-KEY-graylog
+        state: present
+
+    - name: Graylog Repository
+      yum_repository:
+        name: Graylog
+        description: Graylog
+        baseurl: https://packages.graylog2.org/repo/el/stable/5.2/x86_64/
+        enabled: yes
+        gpgcheck : yes
+        gpgkey: https://packages.graylog2.org/repo/el/stable/GPG-KEY-graylog
+  when:
+    - ansible_os_family == "RedHat"
+
+- name: Install Packages
+  package:
+    state: latest
+    name:
+      - mongodb-org
+      - opensearch
+      - graylog-server
+
+- name: Set opensearch folder permissions
+  file:
+    path: /var/lib/opensearch
+    state: directory
+    owner: opensearch
+    group: opensearch
+    mode: u+rwx,g-rx,o-
+
+- name: Generate opensearch.yml file from template
+  template:
+    src: opensearch.yml.j2
+    dest: /etc/opensearch/opensearch.yml
+    owner: opensearch
+    group: opensearch
+    mode: u=rw,g=r,o=r
+  notify:
+    - Restart OpenSearch
+
+- name: Generate jvm.options file from template
+  template:
+    src: jvm.options.j2
+    dest: /etc/opensearch/jvm.options
+    owner: opensearch
+    group: opensearch
+    mode: u=rw,g=r,o=r
+  notify:
+    - Restart OpenSearch
+
+- name: Generate opensearch.conf file from template
+  template:
+    src: opensearch.conf.j2
+    dest: /usr/lib/tmpfiles.d/opensearch.conf
+    owner: root
+    group: root
+    mode: u=rw,g=r,o=r
+  notify:
+    - Restart OpenSearch
+
+- name: Set vm.max_map_count in sysctl
+  sysctl:
+    name: vm.max_map_count
+    value: '262144'
+    sysctl_set: true
+    state: present
+    reload: true
+
+- name: Copy SSL crt
+  copy:
+    src: /etc/letsencrypt/live/{{ host_fqdn }}/fullchain.pem
+    dest: /etc/graylog/server/graylog.crt
+    remote_src: yes
+    owner: graylog
+    group: graylog
+    mode: u=rw,g=r,o=
+  notify:
+    - Restart Graylog
+
+- name: Copy SSL key
+  copy:
+    src: /etc/letsencrypt/live/{{ host_fqdn }}/privkey.pem
+    dest: /etc/graylog/server/graylog.key
+    remote_src: yes
+    owner: graylog
+    group: graylog
+    mode: u=rw,g=r,o=
+  notify:
+    - Restart Graylog
+
+- name: Generate server.conf file from template
+  template:
+    src: server.conf.j2
+    dest: /etc/graylog/server/server.conf
+    owner: root
+    group: root
+    mode: u=rw,g=r,o=r
+  notify:
+    - Restart Graylog
+
+- name: Enable MongoDB daemon
+  service:
+    name: mongod
+    enabled: yes
+    state: started
+
+- name: Enable OpenSearch daemon
+  service:
+    name: opensearch
+    enabled: yes
+    state: started
+
+- name: Enable Graylog daemon
+  service:
+    name: graylog-server
+    enabled: yes
+    state: started
+
+- name: Firewall rules
+  firewalld:
+    port: "9000/tcp"
+    state: enabled
+    permanent: true
+    immediate: true
+
+- name: Selinux
+  shell: update-crypto-policies --set DEFAULT:SHA1
+
+- name: Do not allow the SHA-1 sign package
+  shell: update-crypto-policies --set DEFAULT
